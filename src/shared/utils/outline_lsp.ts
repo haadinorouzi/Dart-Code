@@ -1,14 +1,16 @@
-import * as as from "../analysis_server_types";
+import { Range } from "vscode-languageclient";
+import { Outline } from "../analysis/lsp/custom_protocol";
 import { Logger } from "../interfaces";
+import { TestOutlineInfo } from "./outline_das";
 
-export abstract class OutlineVisitor {
+export abstract class LspOutlineVisitor {
 	constructor(private logger: Logger) { }
 
-	public visit(outline: as.Outline) {
+	public visit(outline: Outline) {
 		this.visitNode(outline);
 	}
 
-	private visitChildren(outline: as.Outline) {
+	private visitChildren(outline: Outline) {
 		if (outline.children) {
 			for (const child of outline.children) {
 				this.visit(child);
@@ -16,7 +18,7 @@ export abstract class OutlineVisitor {
 		}
 	}
 
-	private visitNode(outline: as.Outline) {
+	private visitNode(outline: Outline) {
 		switch (outline && outline.element && outline.element.kind) {
 			case "CLASS":
 				this.visitClass(outline);
@@ -98,56 +100,58 @@ export abstract class OutlineVisitor {
 		}
 	}
 
-	protected visitClass(outline: as.Outline): void { this.visitChildren(outline); }
-	protected visitClassTypeAlias(outline: as.Outline): void { this.visitChildren(outline); }
-	protected visitCompilationUnit(outline: as.Outline): void { this.visitChildren(outline); }
-	protected visitConstructor(outline: as.Outline): void { this.visitChildren(outline); }
-	protected visitContructorInvocation(outline: as.Outline): void { this.visitChildren(outline); }
-	protected visitEnum(outline: as.Outline): void { this.visitChildren(outline); }
-	protected visitEnumConstant(outline: as.Outline): void { this.visitChildren(outline); }
-	protected visitField(outline: as.Outline): void { this.visitChildren(outline); }
-	protected visitXXX(outline: as.Outline): void { this.visitChildren(outline); }
-	protected visitFile(outline: as.Outline): void { this.visitChildren(outline); }
-	protected visitFunctionInvocation(outline: as.Outline): void { this.visitChildren(outline); }
-	protected visitFunctionTypeAlias(outline: as.Outline): void { this.visitChildren(outline); }
-	protected visitGetter(outline: as.Outline): void { this.visitChildren(outline); }
-	protected visitLabel(outline: as.Outline): void { this.visitChildren(outline); }
-	protected visitLibrary(outline: as.Outline): void { this.visitChildren(outline); }
-	protected visitLocalVariable(outline: as.Outline): void { this.visitChildren(outline); }
-	protected visitMethod(outline: as.Outline): void { this.visitChildren(outline); }
-	protected visitParameter(outline: as.Outline): void { this.visitChildren(outline); }
-	protected visitPrefix(outline: as.Outline): void { this.visitChildren(outline); }
-	protected visitSetter(outline: as.Outline): void { this.visitChildren(outline); }
-	protected visitTopLevelVariable(outline: as.Outline): void { this.visitChildren(outline); }
-	protected visitTypeParameter(outline: as.Outline): void { this.visitChildren(outline); }
-	protected visitUnitTestGroup(outline: as.Outline): void { this.visitChildren(outline); }
-	protected visitUnitTestTest(outline: as.Outline): void { this.visitChildren(outline); }
-	protected visitUnknown(outline: as.Outline): void { this.visitChildren(outline); }
+	protected visitClass(outline: Outline): void { this.visitChildren(outline); }
+	protected visitClassTypeAlias(outline: Outline): void { this.visitChildren(outline); }
+	protected visitCompilationUnit(outline: Outline): void { this.visitChildren(outline); }
+	protected visitConstructor(outline: Outline): void { this.visitChildren(outline); }
+	protected visitContructorInvocation(outline: Outline): void { this.visitChildren(outline); }
+	protected visitEnum(outline: Outline): void { this.visitChildren(outline); }
+	protected visitEnumConstant(outline: Outline): void { this.visitChildren(outline); }
+	protected visitField(outline: Outline): void { this.visitChildren(outline); }
+	protected visitXXX(outline: Outline): void { this.visitChildren(outline); }
+	protected visitFile(outline: Outline): void { this.visitChildren(outline); }
+	protected visitFunctionInvocation(outline: Outline): void { this.visitChildren(outline); }
+	protected visitFunctionTypeAlias(outline: Outline): void { this.visitChildren(outline); }
+	protected visitGetter(outline: Outline): void { this.visitChildren(outline); }
+	protected visitLabel(outline: Outline): void { this.visitChildren(outline); }
+	protected visitLibrary(outline: Outline): void { this.visitChildren(outline); }
+	protected visitLocalVariable(outline: Outline): void { this.visitChildren(outline); }
+	protected visitMethod(outline: Outline): void { this.visitChildren(outline); }
+	protected visitParameter(outline: Outline): void { this.visitChildren(outline); }
+	protected visitPrefix(outline: Outline): void { this.visitChildren(outline); }
+	protected visitSetter(outline: Outline): void { this.visitChildren(outline); }
+	protected visitTopLevelVariable(outline: Outline): void { this.visitChildren(outline); }
+	protected visitTypeParameter(outline: Outline): void { this.visitChildren(outline); }
+	protected visitUnitTestGroup(outline: Outline): void { this.visitChildren(outline); }
+	protected visitUnitTestTest(outline: Outline): void { this.visitChildren(outline); }
+	protected visitUnknown(outline: Outline): void { this.visitChildren(outline); }
 }
 
-export class TestOutlineVisitor extends OutlineVisitor {
-	public readonly tests: TestOutlineInfo[] = [];
+export class LspTestOutlineVisitor extends LspOutlineVisitor {
+	constructor(logger: Logger, private readonly file: string) {
+		super(logger);
+	}
+	public readonly tests: LspTestOutlineInfo[] = [];
 	private readonly names: string[] = [];
-	protected visitUnitTestTest(outline: as.Outline) {
+	protected visitUnitTestTest(outline: Outline) {
 		this.addTest(outline, super.visitUnitTestTest);
 	}
-	protected visitUnitTestGroup(outline: as.Outline) {
+	protected visitUnitTestGroup(outline: Outline) {
 		this.addTest(outline, super.visitUnitTestGroup);
 	}
 
-	private addTest(outline: as.Outline, base: (outline: as.Outline) => void) {
+	private addTest(outline: Outline, base: (outline: Outline) => void) {
 		const name = this.extractTestName(outline.element.name);
-		if (!name || !outline.element.location)
+		if (!name || !outline.element.range)
 			return;
 		this.names.push(name);
 		const fullName = this.names.join(" ");
 		const isGroup = outline.element.kind === "UNIT_TEST_GROUP";
 		this.tests.push({
-			file: outline.element.location.file,
+			file: this.file,
 			fullName,
 			isGroup,
-			length: outline.codeLength || outline.element.location.length,
-			offset: outline.codeOffset || outline.element.location.offset,
+			range: outline.codeRange || outline.range || (outline.element ? outline.element.range : undefined),
 		});
 		try {
 			base.bind(this)(outline);
@@ -172,10 +176,6 @@ export class TestOutlineVisitor extends OutlineVisitor {
 	}
 }
 
-export interface TestOutlineInfo {
-	fullName: string;
-	file: string;
-	offset: number;
-	length: number;
-	isGroup: boolean;
+export interface LspTestOutlineInfo extends TestOutlineInfo {
+	range: Range;
 }

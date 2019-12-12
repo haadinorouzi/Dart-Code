@@ -36,7 +36,7 @@ import { LoggingCommands } from "./commands/logging";
 import { OpenInOtherEditorCommands } from "./commands/open_in_other_editors";
 import { RefactorCommands } from "./commands/refactor";
 import { SdkCommands } from "./commands/sdk";
-import { cursorIsInTest, DasTestCommands, isInImplementationFile, isInTestFile } from "./commands/test";
+import { cursorIsInTest, DasTestCommands, isInImplementationFile, isInTestFile, LspTestCommands } from "./commands/test";
 import { TypeHierarchyCommand } from "./commands/type_hierarchy";
 import { config } from "./config";
 import { ClosingLabelsDecorations } from "./decorations/closing_labels_decorations";
@@ -428,6 +428,8 @@ export async function activate(context: vs.ExtensionContext, isRestart: boolean 
 	context.subscriptions.push(new OpenInOtherEditorCommands(logger, sdks));
 	if (dasAnalyzer)
 		context.subscriptions.push(new DasTestCommands(logger, dasAnalyzer.fileTracker));
+	if (lspAnalyzer)
+		context.subscriptions.push(new LspTestCommands(logger, lspAnalyzer.fileTracker));
 
 	if (lspClient) {
 		// TODO: LSP equivs of the others...
