@@ -1,5 +1,3 @@
-"use strict";
-
 import * as path from "path";
 import * as vs from "vscode";
 import * as as from "../../shared/analysis_server_types";
@@ -15,19 +13,138 @@ const DART_SHOW_FLUTTER_OUTLINE = "dart-code:showFlutterOutline";
 const WIDGET_SELECTED_CONTEXT = "dart-code:isSelectedWidget";
 const WIDGET_SUPPORTS_CONTEXT_PREFIX = "dart-code:widgetSupports:";
 
-export class FlutterOutlineProvider implements vs.TreeDataProvider<FlutterWidgetItem>, vs.Disposable {
-	private subscriptions: vs.Disposable[] = [];
-	private activeEditor: vs.TextEditor | undefined;
-	private flutterOutline: as.FlutterOutlineNotification | undefined;
-	private rootNode: FlutterWidgetItem | undefined;
-	private treeNodesByLine: { [key: number]: FlutterWidgetItem[]; } = [];
-	private updateTimeout: NodeJS.Timer | undefined;
-	private onDidChangeTreeDataEmitter: vs.EventEmitter<FlutterWidgetItem | undefined> = new vs.EventEmitter<FlutterWidgetItem | undefined>();
+abstract class FlutterOutlineProvider<TRoot> implements vs.TreeDataProvider<FlutterWidgetItem>, vs.Disposable {
+	protected subscriptions: vs.Disposable[] = [];
+	protected activeEditor: vs.TextEditor | undefined;
+	protected flutterOutline: (TRoot & ({ file: string } | { uri: vs.Uri })) | undefined;
+	protected rootNode: FlutterWidgetItem | undefined;
+	protected treeNodesByLine: { [key: number]: FlutterWidgetItem[]; } = [];
+	protected updateTimeout: NodeJS.Timer | undefined;
+	protected onDidChangeTreeDataEmitter: vs.EventEmitter<FlutterWidgetItem | undefined> = new vs.EventEmitter<FlutterWidgetItem | undefined>();
 	public readonly onDidChangeTreeData: vs.Event<FlutterWidgetItem | undefined> = this.onDidChangeTreeDataEmitter.event;
-	private lastSelectedWidget: FlutterWidgetItem | undefined;
+	protected lastSelectedWidget: FlutterWidgetItem | undefined;
 
+	protected setTrackingFile(editor: vs.TextEditor | undefined) {
+		if (editor && isAnalyzable(editor.document)) {
+			this.activeEditor = editor;
+			this.flutterOutline = undefined;
+			this.rootNode = undefined;
+			this.refresh(); // Force update (to nothing) while requests are in-flight.
+			this.forceNotifications(editor);
+		} else if (editor && editor.document.uri.scheme === "file") {
+			// HACK: We can't currently reliably tell when editors are changed that are only real
+			// text editors (debug window is considered an editor) so we should only hide the tree
+			// when we know a file that is not ours is selected.
+			// https://github.com/Microsoft/vscode/issues/45188
+			this.activeEditor = undefined;
+			FlutterOutlineProvider.hideTree();
+		} else {
+			// HACK: If there are no valid open editors, hide the tree.
+			// The timeout is because the open editors disappear briefly during a closing
+			// of one preview and opening of another :(
+			// https://github.com/Microsoft/vscode/issues/45188.
+			setTimeout(() => {
+				if (!vs.window.visibleTextEditors.filter((e) => isAnalyzable(e.document)).length) {
+					FlutterOutlineProvider.hideTree();
+				}
+			}, 100);
+		}
+	}
+
+	protected abstract forceNotifications(editor: vs.TextEditor): void;
+	protected abstract file: string | undefined;
+
+	public async setContexts(selection: FlutterWidgetItem[]) {
+		// Unmark the old node as being selected.
+		if (this.lastSelectedWidget) {
+			this.lastSelectedWidget.contextValue = undefined;
+			this.refresh(this.lastSelectedWidget);
+		}
+
+		// Clear all contexts that enabled refactors.
+		for (const refactor of flutterOutlineCommands) {
+			vs.commands.executeCommand("setContext", WIDGET_SUPPORTS_CONTEXT_PREFIX + refactor, false);
+		}
+
+		// Set up the new contexts for our node and mark is as current.
+		if (this.activeEditor && selection && selection.length === 1 && isWidget(selection[0].outline)) {
+			const fixes = (await getFixes(this.activeEditor, selection[0].outline))
+				.filter((f): f is vs.CodeAction => f instanceof vs.CodeAction)
+				.filter((ca) => ca.kind && ca.kind.value && flutterOutlineCommands.indexOf(ca.kind.value) !== -1);
+
+			// Stash the fixes, as we may need to call them later.
+			selection[0].fixes = fixes;
+
+			for (const fix of fixes)
+				vs.commands.executeCommand("setContext", WIDGET_SUPPORTS_CONTEXT_PREFIX + (fix.kind ? fix.kind.value : "NOKIND"), true);
+
+			// Used so we can show context menu if you right-click the selected one.
+			// We can't support arbitrary context menus, because we can't get the fixes up-front (see
+			// https://github.com/dart-lang/sdk/issues/32462) so we fetch when you select an item
+			// and then just support it if it's selected.
+			selection[0].contextValue = WIDGET_SELECTED_CONTEXT;
+			this.lastSelectedWidget = selection[0];
+			this.refresh(selection[0]);
+		}
+	}
+
+	public getNodeAt(uri: vs.Uri, pos: vs.Position): FlutterWidgetItem | undefined {
+		if (!this.activeEditor || !this.flutterOutline || this.file !== fsPath(uri) || !this.treeNodesByLine[pos.line])
+			return;
+
+		const offset = this.activeEditor.document.offsetAt(pos);
+		const nodes = this.treeNodesByLine[pos.line];
+		// We want the last node that started before the position (eg. most specific).
+		let currentBest: FlutterWidgetItem | undefined;
+		for (const item of nodes) {
+			if (item.outline.offset <= offset
+				&& item.outline.offset + item.outline.length >= offset) {
+				currentBest = item;
+			}
+		}
+
+		if (currentBest === this.rootNode)
+			return undefined; // Root node isn't actually in the tree.
+
+		return currentBest;
+	}
+
+	public refresh(item?: FlutterWidgetItem | undefined): void {
+		this.onDidChangeTreeDataEmitter.fire(item);
+	}
+
+	public getTreeItem(element: FlutterWidgetItem): vs.TreeItem {
+		return element;
+	}
+
+	public getChildren(element?: FlutterWidgetItem): FlutterWidgetItem[] {
+		if (element)
+			return element.children;
+		if (this.rootNode)
+			return this.rootNode.children;
+		return [];
+	}
+
+	public getParent(element: FlutterWidgetItem): FlutterWidgetItem | undefined {
+		return element.parent;
+	}
+
+	private static setTreeVisible(visible: boolean) {
+		vs.commands.executeCommand("setContext", DART_SHOW_FLUTTER_OUTLINE, visible);
+	}
+
+	public static showTree() { this.setTreeVisible(true); }
+	public static hideTree() { this.setTreeVisible(false); }
+
+	public dispose() {
+		this.activeEditor = undefined;
+		this.subscriptions.forEach((s) => s.dispose());
+	}
+}
+
+export class DasFlutterOutlineProvider extends FlutterOutlineProvider<as.FlutterOutlineNotification> {
 	constructor(private readonly analyzer: DasAnalyzerClient) {
-		this.analyzer = analyzer;
+		super();
 		this.analyzer.registerForServerConnected((c) => {
 			if (analyzer.capabilities.supportsFlutterOutline) {
 				this.analyzer.registerForFlutterOutline((n) => {
@@ -87,118 +204,12 @@ export class FlutterOutlineProvider implements vs.TreeDataProvider<FlutterWidget
 		return undefined;
 	}
 
-	private setTrackingFile(editor: vs.TextEditor | undefined) {
-		if (editor && isAnalyzable(editor.document)) {
-			this.activeEditor = editor;
-			this.flutterOutline = undefined;
-			this.rootNode = undefined;
-			this.refresh(); // Force update (to nothing) while requests are in-flight.
-			this.analyzer.forceNotificationsFor(fsPath(editor.document.uri));
-		} else if (editor && editor.document.uri.scheme === "file") {
-			// HACK: We can't currently reliably tell when editors are changed that are only real
-			// text editors (debug window is considered an editor) so we should only hide the tree
-			// when we know a file that is not ours is selected.
-			// https://github.com/Microsoft/vscode/issues/45188
-			this.activeEditor = undefined;
-			FlutterOutlineProvider.hideTree();
-		} else {
-			// HACK: If there are no valid open editors, hide the tree.
-			// The timeout is because the open editors disappear briefly during a closing
-			// of one preview and opening of another :(
-			// https://github.com/Microsoft/vscode/issues/45188.
-			setTimeout(() => {
-				if (!vs.window.visibleTextEditors.filter((e) => isAnalyzable(e.document)).length) {
-					FlutterOutlineProvider.hideTree();
-				}
-			}, 100);
-		}
+	protected forceNotifications(editor: vs.TextEditor) {
+		this.analyzer.forceNotificationsFor(fsPath(editor.document.uri));
 	}
 
-	public async setContexts(selection: FlutterWidgetItem[]) {
-		// Unmark the old node as being selected.
-		if (this.lastSelectedWidget) {
-			this.lastSelectedWidget.contextValue = undefined;
-			this.refresh(this.lastSelectedWidget);
-		}
-
-		// Clear all contexts that enabled refactors.
-		for (const refactor of flutterOutlineCommands) {
-			vs.commands.executeCommand("setContext", WIDGET_SUPPORTS_CONTEXT_PREFIX + refactor, false);
-		}
-
-		// Set up the new contexts for our node and mark is as current.
-		if (this.activeEditor && selection && selection.length === 1 && isWidget(selection[0].outline)) {
-			const fixes = (await getFixes(this.activeEditor, selection[0].outline))
-				.filter((f): f is vs.CodeAction => f instanceof vs.CodeAction)
-				.filter((ca) => ca.kind && ca.kind.value && flutterOutlineCommands.indexOf(ca.kind.value) !== -1);
-
-			// Stash the fixes, as we may need to call them later.
-			selection[0].fixes = fixes;
-
-			for (const fix of fixes)
-				vs.commands.executeCommand("setContext", WIDGET_SUPPORTS_CONTEXT_PREFIX + (fix.kind ? fix.kind.value : "NOKIND"), true);
-
-			// Used so we can show context menu if you right-click the selected one.
-			// We can't support arbitrary context menus, because we can't get the fixes up-front (see
-			// https://github.com/dart-lang/sdk/issues/32462) so we fetch when you select an item
-			// and then just support it if it's selected.
-			selection[0].contextValue = WIDGET_SELECTED_CONTEXT;
-			this.lastSelectedWidget = selection[0];
-			this.refresh(selection[0]);
-		}
-	}
-
-	public getNodeAt(uri: vs.Uri, pos: vs.Position): FlutterWidgetItem | undefined {
-		if (!this.activeEditor || !this.flutterOutline || this.flutterOutline.file !== fsPath(uri) || !this.treeNodesByLine[pos.line])
-			return;
-
-		const offset = this.activeEditor.document.offsetAt(pos);
-		const nodes = this.treeNodesByLine[pos.line];
-		// We want the last node that started before the position (eg. most specific).
-		let currentBest: FlutterWidgetItem | undefined;
-		for (const item of nodes) {
-			if (item.outline.offset <= offset
-				&& item.outline.offset + item.outline.length >= offset) {
-				currentBest = item;
-			}
-		}
-
-		if (currentBest === this.rootNode)
-			return undefined; // Root node isn't actually in the tree.
-
-		return currentBest;
-	}
-
-	public refresh(item?: FlutterWidgetItem | undefined): void {
-		this.onDidChangeTreeDataEmitter.fire(item);
-	}
-
-	public getTreeItem(element: FlutterWidgetItem): vs.TreeItem {
-		return element;
-	}
-
-	public getChildren(element?: FlutterWidgetItem): FlutterWidgetItem[] {
-		if (element)
-			return element.children;
-		if (this.rootNode)
-			return this.rootNode.children;
-		return [];
-	}
-
-	public getParent(element: FlutterWidgetItem): FlutterWidgetItem | undefined {
-		return element.parent;
-	}
-
-	private static setTreeVisible(visible: boolean) {
-		vs.commands.executeCommand("setContext", DART_SHOW_FLUTTER_OUTLINE, visible);
-	}
-
-	public static showTree() { this.setTreeVisible(true); }
-	public static hideTree() { this.setTreeVisible(false); }
-
-	public dispose() {
-		this.activeEditor = undefined;
-		this.subscriptions.forEach((s) => s.dispose());
+	protected get file() {
+		return this.flutterOutline ? this.flutterOutline.file : undefined;
 	}
 }
 

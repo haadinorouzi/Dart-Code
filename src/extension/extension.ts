@@ -45,7 +45,7 @@ import { FlutterIconDecorations } from "./decorations/flutter_icon_decorations";
 import { FlutterUiGuideDecorations } from "./decorations/flutter_ui_guides_decorations";
 import { setUpDaemonMessageHandler } from "./flutter/daemon_message_handler";
 import { FlutterDaemon } from "./flutter/flutter_daemon";
-import { FlutterOutlineProvider } from "./flutter/flutter_outline_view";
+import { DasFlutterOutlineProvider } from "./flutter/flutter_outline_view";
 import { HotReloadOnSaveHandler } from "./flutter/hot_reload_save_handler";
 import { LspAnalyzerStatusReporter } from "./lsp/analyzer_status_reporter";
 import { LspClosingLabelsDecorations } from "./lsp/closing_labels_decorations";
@@ -472,10 +472,10 @@ export async function activate(context: vs.ExtensionContext, isRestart: boolean 
 			testTreeProvider.setSelectedNodes(e.selection && e.selection.length === 1 ? e.selection[0] as TestItemTreeItem : undefined);
 		}),
 	);
-	let flutterOutlineTreeProvider: FlutterOutlineProvider | undefined;
+	let flutterOutlineTreeProvider: DasFlutterOutlineProvider | undefined;
 	if (!isUsingLsp && config.flutterOutline && dasClient) {
 		// TODO: Extract this out - it's become messy since TreeView was added in.
-		flutterOutlineTreeProvider = new FlutterOutlineProvider(dasClient);
+		flutterOutlineTreeProvider = new DasFlutterOutlineProvider(dasClient);
 		const tree = vs.window.createTreeView("dartFlutterOutline", { treeDataProvider: flutterOutlineTreeProvider, showCollapseAll: true });
 		tree.onDidChangeSelection((e) => {
 			// TODO: This should be in a tree, not the data provider.
