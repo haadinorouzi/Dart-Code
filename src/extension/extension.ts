@@ -363,7 +363,7 @@ export async function activate(context: vs.ExtensionContext, isRestart: boolean 
 	context.subscriptions.push(debugProvider);
 
 	// Setup that requires server version/capabilities.
-	if (!isUsingLsp && dasClient) {
+	if (!isUsingLsp && dasClient && dasAnalyzer) {
 		if (config.previewFlutterUiGuides)
 			context.subscriptions.push(new FlutterUiGuideDecorations(dasAnalyzer));
 
@@ -437,7 +437,7 @@ export async function activate(context: vs.ExtensionContext, isRestart: boolean 
 
 	// Set up commands for Dart editors.
 	context.subscriptions.push(new EditCommands());
-	if (dasClient) {
+	if (dasClient && dasAnalyzer) {
 		context.subscriptions.push(new DasEditCommands(logger, context, dasClient));
 		context.subscriptions.push(new RefactorCommands(logger, context, dasClient));
 		context.subscriptions.push(new TypeHierarchyCommand(logger, dasClient));
@@ -590,7 +590,7 @@ export async function activate(context: vs.ExtensionContext, isRestart: boolean 
 			debugCommands,
 			debugProvider,
 			envUtils,
-			fileTracker: dasAnalyzer.fileTracker,
+			fileTracker: dasAnalyzer ? dasAnalyzer.fileTracker : undefined,
 			flutterCapabilities,
 			flutterOutlineTreeProvider,
 			get cursorIsInTest() { return cursorIsInTest; },
