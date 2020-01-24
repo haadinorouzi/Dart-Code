@@ -30,6 +30,7 @@ import { AnalyzerCommands } from "./commands/analyzer";
 import { DebugCommands } from "./commands/debug";
 import { EditCommands } from "./commands/edit";
 import { DasEditCommands } from "./commands/edit_das";
+import { LspEditCommands } from "./commands/edit_lsp";
 import { FlutterOutlineCommands } from "./commands/flutter_outline";
 import { GoToSuperCommand } from "./commands/go_to_super";
 import { LoggingCommands } from "./commands/logging";
@@ -432,11 +433,11 @@ export async function activate(context: vs.ExtensionContext, isRestart: boolean 
 	if (lspAnalyzer)
 		context.subscriptions.push(new LspTestCommands(logger, lspAnalyzer.fileTracker));
 
-	if (lspClient) {
+	if (lspClient && lspAnalyzer) {
 		// TODO: LSP equivs of the others...
 		// Refactors
 		// TypeHierarchyCommand
-		context.subscriptions.push(new LspGoToSuperCommand(lspClient));
+		context.subscriptions.push(new LspGoToSuperCommand(lspAnalyzer));
 	}
 
 	// Set up commands for Dart editors.
@@ -446,6 +447,8 @@ export async function activate(context: vs.ExtensionContext, isRestart: boolean 
 		context.subscriptions.push(new RefactorCommands(logger, context, dasClient));
 		context.subscriptions.push(new TypeHierarchyCommand(logger, dasClient));
 		context.subscriptions.push(new GoToSuperCommand(dasAnalyzer));
+	} else if (lspClient && lspAnalyzer) {
+		context.subscriptions.push(new LspEditCommands(lspAnalyzer));
 	}
 
 	// Register our view providers.
